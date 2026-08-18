@@ -45,6 +45,61 @@ section() {
   echo "  collected: ${title}"
 }
 
+# mount_rollup [path-prefix]
+# A container host carries one overlay mount per container plus tmpfs and shm
+# mounts per pod, which bury the real filesystems in df output. The df sections
+# exclude those types; this summarizes them instead. Only the additive columns
+# are summed: overlay reports its backing filesystem, and tmpfs sizes are limits
+# against shared RAM, so totalling either would be double-counting. Mounts that
+# are nearly full are listed individually so filtering cannot hide them.
+mount_rollup() {
+  local prefix="${1:-/}"
+  { df -PkT; echo '#inodes'; df -PTi; } 2>/dev/null | awk -v prefix="$prefix" '
+    function human(kb,   units, i) {
+      split("KiB MiB GiB TiB PiB", units, " ")
+      for (i = 1; kb >= 1024 && i < 5; i++) kb /= 1024
+      return sprintf("%.1f %s", kb, units[i])
+    }
+    $1 == "#inodes"    { pass = "inodes"; next }
+    $1 == "Filesystem" { next }
+    {
+      mount = $NF
+      if (substr(mount, 1, length(prefix)) != prefix) next
+      if ($2 == "overlay")    class = "overlay"
+      else if ($2 == "tmpfs") class = (mount ~ /\/shm$/) ? "shm" : "tmpfs"
+      else next
+      if (pass == "inodes") { iused[class] += $4; next }
+      total++
+      mounts[class]++
+      used[class] += $4
+      if ($6 + 0 >= 90) full[++nfull] = sprintf("  %-7s %4d%%  %s", class, $6 + 0, mount)
+    }
+    END {
+      if (!total) { print "no overlay/tmpfs/shm mounts found under " prefix; exit }
+      printf "%-8s %7s %12s %12s\n", "TYPE", "MOUNTS", "USED", "IUSED"
+      n = split("overlay tmpfs shm", order, " ")
+      for (i = 1; i <= n; i++) {
+        class = order[i]
+        if (!(class in mounts)) continue
+        if (class == "overlay")
+          printf "%-8s %7d %12s %12s\n", class, mounts[class], "-", "-"
+        else
+          printf "%-8s %7d %12s %12d\n", class, mounts[class], human(used[class]), iused[class]
+      }
+      if ("overlay" in mounts) {
+        print ""
+        print "Each overlay mount reports the usage of its backing filesystem, so its"
+        print "space is already counted in the disk usage section and is omitted here."
+      }
+      if (nfull) {
+        print ""
+        print "Excluded mounts at 90% capacity or above:"
+        for (i = 1; i <= nfull; i++) print full[i]
+      }
+    }
+  '
+}
+
 {
   echo "Manifest k3s diagnostics"
   echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC') ($(date '+%Y-%m-%d %H:%M:%S %Z') local)"
@@ -64,8 +119,9 @@ section "Uptime"                     uptime
 section "Recent reboots"             bash -c 'last reboot | head -5'
 section "Memory"                     free -h
 section "Block devices"              lsblk
-section "Disk usage"                 df -h
-section "Inode usage"                df -i
+section "Disk usage"                 df -h -x overlay -x tmpfs
+section "Inode usage"                df -i -x overlay -x tmpfs
+section "overlay/tmpfs/shm roll-up"  mount_rollup
 # is-active exits non-zero for "inactive", which is a valid answer, not a
 # failure — mask the exit code so the section note doesn't imply an error.
 section "SELinux mode"               getenforce
@@ -80,7 +136,10 @@ section "firewalld active?"          bash -c 'systemctl is-active firewalld; tru
 section "k3s service status"         systemctl status k3s.service --no-pager -l
 section "/etc/rancher/k3s contents"  ls -la /etc/rancher/k3s/
 section "k3s server dir contents"    ls -la /var/lib/rancher/k3s/server/
-section "k3s data dir sizes"         bash -c 'du -sh /var/lib/rancher/k3s/* 2>/dev/null'
+# -x keeps du on the data dir's own filesystem so it does not walk the per-pod
+# shm and overlay mounts nested under it; the roll-up below accounts for those.
+section "k3s data dir sizes"         bash -c 'du -shx /var/lib/rancher/k3s/* 2>/dev/null'
+section "k3s nested mount roll-up"   mount_rollup /var/lib/rancher/k3s
 
 # ────────────────────────────────────────────────────────────────
 # Part 3: long logs (kept last so the quick-look info is up top)
