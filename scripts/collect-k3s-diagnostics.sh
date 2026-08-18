@@ -59,12 +59,13 @@ echo "Writing diagnostics to $OUT"
 section "OS release"                 cat /etc/os-release
 section "Kernel"                     uname -a
 section "Hostname details"           hostnamectl
+section "IPv4 addresses"             ip -4 addr
 section "Uptime"                     uptime
 section "Recent reboots"             bash -c 'last reboot | head -5'
 section "Memory"                     free -h
+section "Block devices"              lsblk
 section "Disk usage"                 df -h
 section "Inode usage"                df -i
-section "IPv4 addresses"             ip -4 addr
 # is-active exits non-zero for "inactive", which is a valid answer, not a
 # failure — mask the exit code so the section note doesn't imply an error.
 section "SELinux mode"               getenforce
@@ -86,6 +87,29 @@ section "k3s data dir sizes"         bash -c 'du -sh /var/lib/rancher/k3s/* 2>/d
 # ────────────────────────────────────────────────────────────────
 section "k3s journal (last 500 lines)" bash -c 'journalctl -u k3s.service --no-pager | tail -500'
 
+# ────────────────────────────────────────────────────────────────
+# Part 4: redacted deploy config (interactive, so it runs last)
+# ────────────────────────────────────────────────────────────────
+echo
+echo "----------------------------------------------------------------"
+echo "Next: collecting the redacted deploy config."
+echo "You may be prompted to decrypt the config."
+echo "The output is shown below and appended to the diagnostics file."
+echo "----------------------------------------------------------------"
+echo
+
+banner "Deploy config (redacted)" manifest-installer deploy-config decrypt --redacted
+# Tee so the operator sees exactly what was added to the file. PIPESTATUS[0]
+# is the installer's status, not tee's. Older CLI versions lack --redacted;
+# that failure is noted and ignored rather than treated as fatal.
+manifest-installer deploy-config decrypt --redacted 2>&1 | tee -a "$OUT"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+  echo "[command exited non-zero or is unavailable: manifest-installer deploy-config decrypt --redacted]" | tee -a "$OUT"
+fi
+echo "  collected: Deploy config (redacted)"
+
 echo
 echo "Done. Please send this file back to Manifest support:"
 echo "  $OUT"
+echo
+echo "IMPORTANT: always review debug logs for sensitive information before sharing."
