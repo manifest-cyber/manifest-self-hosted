@@ -16,10 +16,9 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "         Re-run with: sudo bash $0" >&2
 fi
 
-# section <title> <command...>
-# Prints a banner and runs the command, capturing stdout+stderr.
-# A failing or missing command is recorded rather than aborting the script.
-section() {
+# banner <title> <command...>
+# Writes a section header into the output file.
+banner() {
   local title="$1"
   shift
   {
@@ -29,6 +28,15 @@ section() {
     echo "## \$ $*"
     echo "================================================================"
   } >>"$OUT"
+}
+
+# section <title> <command...>
+# Prints a banner and runs the command, capturing stdout+stderr.
+# A failing or missing command is recorded rather than aborting the script.
+section() {
+  local title="$1"
+  banner "$@"
+  shift
   if "$@" >>"$OUT" 2>&1; then
     :
   else
